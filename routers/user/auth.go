@@ -10,6 +10,10 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
+	"net/url"
+	"bytes"
+	"encoding/json"
 
 	"code.gitea.io/gitea/models"
 	"code.gitea.io/gitea/modules/auth"
@@ -25,6 +29,7 @@ import (
 	"code.gitea.io/gitea/modules/util"
 	"code.gitea.io/gitea/services/externalaccount"
 	"code.gitea.io/gitea/services/mailer"
+	"github.com/google/uuid"
 
 	"gitea.com/macaron/captcha"
 	"github.com/markbates/goth"
@@ -34,6 +39,10 @@ import (
 const (
 	// tplMustChangePassword template for updating a user's password
 	tplMustChangePassword = "user/auth/change_passwd"
+	// Oauth server to handle threebot connect authentication
+	oauthServer = "https://oauth.threefold.io"
+	// threebot connect server
+	threebotConnectServer = "https://login.threefold.me"
 	// tplSignIn template for sign in page
 	tplSignIn base.TplName = "user/auth/signin"
 	// tplSignUp template path for sign up page
@@ -122,29 +131,58 @@ func checkAutoLogin(ctx *context.Context) bool {
 	return false
 }
 
-// SignIn render sign in page
+type Pubkey struct {
+	Publickey string `json:"publickey"`
+}
+
+type SignedData struct {
+	SignedAttempt string `json:"signedAttempt"`
+	DoubleName string `json:"doubleName"`
+}
+
+type OauthForm struct {
+	State string `json:"state"`
+	SignedAttempt SignedData `json:"signedAttempt"`
+}
+
+type UserData struct {
+	Email string `json:"email"`
+	UserName string `json:"username"`
+}
+
+// SignIn using threebot connect
 func SignIn(ctx *context.Context) {
-	ctx.Data["Title"] = ctx.Tr("sign_in")
-
-	// Check auto-login.
-	if checkAutoLogin(ctx) {
-		return
-	}
-
-	orderedOAuth2Names, oauth2Providers, err := models.GetActiveOAuth2Providers()
+	uuidStr := uuid.New().String()
+	state := strings.ReplaceAll(uuidStr, "-", "")
+	redirectUrl, _ := url.Parse(threebotConnectServer)
+	var pubkey Pubkey
+	var oauthClient = &http.Client{Timeout: 5 * time.Second}
+	resp, err := oauthClient.Get(oauthServer + "/pubkey")
 	if err != nil {
 		ctx.ServerError("UserSignIn", err)
 		return
 	}
-	ctx.Data["OrderedOAuth2Names"] = orderedOAuth2Names
-	ctx.Data["OAuth2Providers"] = oauth2Providers
-	ctx.Data["Title"] = ctx.Tr("sign_in")
-	ctx.Data["SignInLink"] = setting.AppSubURL + "/user/login"
-	ctx.Data["PageIsSignIn"] = true
-	ctx.Data["PageIsLogin"] = true
-	ctx.Data["EnableSSPI"] = models.IsSSPIEnabled()
+	defer resp.Body.Close()
+	err = json.NewDecoder(resp.Body).Decode(&pubkey)
+	if err != nil {
+		ctx.ServerError("UserSignIn", err)
+		return
+	}
 
-	ctx.HTML(200, tplSignIn)
+	encoded := url.Values{}
+	encoded.Set("state", state)
+	encoded.Set("appid", ctx.Req.Request.Host)
+	encoded.Set("scope", `{"user": true, "email": true}`)
+	encoded.Set("redirecturl", "/user/callbackverify")
+	encoded.Set("publickey", pubkey.Publickey)
+	redirectUrl.RawQuery = encoded.Encode()
+	if err := ctx.Session.Set("threebotConnectState", state); err != nil {
+		log.Error("Error setting uname in session: %v", err)
+	}
+	if err := ctx.Session.Release(); err != nil {
+		log.Error("Error storing session: %v", err)
+	}
+	ctx.Redirect(redirectUrl.String())
 }
 
 // SignInPost response for sign in request
@@ -544,7 +582,6 @@ func handleSignInFull(ctx *context.Context, u *models.User, remember bool, obeyR
 		}
 		return redirectTo
 	}
-
 	if obeyRedirect {
 		ctx.Redirect(setting.AppSubURL + "/")
 	}
@@ -574,6 +611,75 @@ func SignInOAuth(ctx *context.Context) {
 		ctx.ServerError("SignIn", err)
 	}
 	// redirect is done in oauth2.Auth
+}
+
+func VerifyCallback( ctx *context.Context) {
+	state := ctx.Session.Get("threebotConnectState").(string)
+	signedAttempt := ctx.Req.Request.URL.Query().Get("signedAttempt")
+	var signedData SignedData
+	json.Unmarshal([]byte(signedAttempt), &signedData)
+	var oauthClient = &http.Client{Timeout: 5 * time.Second}
+	form := OauthForm{State: state, SignedAttempt: signedData}
+	buff := new(bytes.Buffer)
+	json.NewEncoder(buff).Encode(form)
+	resp, err := oauthClient.Post(oauthServer + "/verify", "application/json; charset=utf-8", buff)
+	if err != nil {
+		ctx.ServerError("SignIn", err)
+		return
+	}
+	defer resp.Body.Close()
+	var userData UserData
+	err = json.NewDecoder(resp.Body).Decode(&userData)
+	if err != nil {
+		ctx.ServerError("SignIn", err)
+		return
+	}
+
+	// Gets user if it doesn't exist create
+	userName := strings.TrimSuffix(userData.UserName, ".3bot")
+	remember := true
+	user, userErr := models.GetUserByName(userName)
+	if userErr != nil {
+		remember = false
+		user = &models.User{
+			Name:     userName,
+			Email:    userData.Email,
+			Passwd:   "",
+			IsActive: true,
+		}
+		if err := models.CreateUser(user); err != nil {
+			switch {
+			case models.IsErrUserAlreadyExist(err):
+				ctx.Data["Err_UserName"] = true
+				ctx.RenderWithErr(ctx.Tr("form.username_been_taken"), tplSignUp, &form)
+			case models.IsErrEmailAlreadyUsed(err):
+				ctx.Data["Err_Email"] = true
+				ctx.RenderWithErr(ctx.Tr("form.email_been_used"), tplSignUp, &form)
+			case models.IsErrNameReserved(err):
+				ctx.Data["Err_UserName"] = true
+				ctx.RenderWithErr(ctx.Tr("user.form.name_reserved", err.(models.ErrNameReserved).Name), tplSignUp, &form)
+			case models.IsErrNamePatternNotAllowed(err):
+				ctx.Data["Err_UserName"] = true
+				ctx.RenderWithErr(ctx.Tr("user.form.name_pattern_not_allowed", err.(models.ErrNamePatternNotAllowed).Pattern), tplSignUp, &form)
+			default:
+				ctx.ServerError("CreateUser", err)
+			}
+			return
+		}
+		log.Trace("Account created: %s", user.Name)
+	
+		// Auto-set admin for the only user.
+		if models.CountUsers() == 1 {
+			user.IsAdmin = true
+			user.IsActive = true
+			user.SetLastLogin()
+			if err := models.UpdateUserCols(user, "is_admin", "is_active", "last_login_unix"); err != nil {
+				ctx.ServerError("UpdateUser", err)
+				return
+			}
+		}
+	}
+	handleSignIn(ctx, user, remember)
 }
 
 // SignInOAuthCallback handles the callback from the given provider
