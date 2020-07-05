@@ -211,17 +211,6 @@ func DeleteAccount(ctx *context.Context) {
 	ctx.Data["Title"] = ctx.Tr("settings")
 	ctx.Data["PageIsSettingsAccount"] = true
 
-	if _, err := models.UserSignIn(ctx.User.Name, ctx.Query("password")); err != nil {
-		if models.IsErrUserNotExist(err) {
-			loadAccountData(ctx)
-
-			ctx.RenderWithErr(ctx.Tr("form.enterred_invalid_password"), tplSettingsAccount, nil)
-		} else {
-			ctx.ServerError("UserSignIn", err)
-		}
-		return
-	}
-
 	if err := models.DeleteUser(ctx.User); err != nil {
 		switch {
 		case models.IsErrUserOwnRepos(err):
