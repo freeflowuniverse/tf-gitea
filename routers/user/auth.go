@@ -12,8 +12,9 @@ import (
 	"strings"
 	"time"
 	"net/url"
-	"bytes"
 	"encoding/json"
+	"encoding/base64"
+
 
 	"code.gitea.io/gitea/models"
 	"code.gitea.io/gitea/modules/auth"
@@ -34,13 +35,15 @@ import (
 	"gitea.com/macaron/captcha"
 	"github.com/markbates/goth"
 	"github.com/tstranex/u2f"
+
+	"github.com/GoKillers/libsodium-go/cryptosign"
+	"golang.org/x/crypto/nacl/box"
+	"golang.org/x/crypto/nacl/sign"
 )
 
 const (
 	// tplMustChangePassword template for updating a user's password
 	tplMustChangePassword = "user/auth/change_passwd"
-	// Oauth server to handle threebot connect authentication
-	oauthServer = "https://oauth.threefold.io"
 	// threebot connect server
 	threebotConnectServer = "https://login.threefold.me"
 	// tplSignIn template for sign in page
@@ -131,8 +134,13 @@ func checkAutoLogin(ctx *context.Context) bool {
 	return false
 }
 
-type Pubkey struct {
-	Publickey string `json:"publickey"`
+type ThreebotData struct {
+	DoubleName string `json:"doubleName"`
+	State string `json:"signedState"`
+	Data struct {
+		Nonce string `json:"nonce"`
+		CipherText string `json:"ciphertext"`
+	} `json:"data"`
 }
 
 type SignedData struct {
@@ -140,14 +148,34 @@ type SignedData struct {
 	DoubleName string `json:"doubleName"`
 }
 
-type OauthForm struct {
-	State string `json:"state"`
-	SignedAttempt SignedData `json:"signedAttempt"`
+type EmailData struct {
+	Email struct {
+		Email string `json:"email"`
+	} `json:"email"`
 }
 
 type UserData struct {
-	Email string `json:"email"`
-	UserName string `json:"username"`
+	PublicKey string `json:"publicKey"`
+}
+
+func getSeedKeys() ([]byte, []byte, error){
+	reader := strings.NewReader(setting.OauthSeed)
+	verifyKey, signKey, err := sign.GenerateKey(reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	pubKey, exit := cryptosign.CryptoSignEd25519PkToCurve25519(verifyKey[:])
+	if exit > 0 {
+		return nil, nil, errors.New("error converting public key to curve")
+
+	}
+	privKey, exit := cryptosign.CryptoSignEd25519SkToCurve25519(signKey[:])
+	if exit > 0 {
+		return nil, nil, errors.New("error converting private key to curve")
+
+	}
+	return pubKey, privKey, nil
+
 }
 
 // SignIn using threebot connect
@@ -155,26 +183,19 @@ func SignIn(ctx *context.Context) {
 	uuidStr := uuid.New().String()
 	state := strings.ReplaceAll(uuidStr, "-", "")
 	redirectUrl, _ := url.Parse(threebotConnectServer)
-	var pubkey Pubkey
-	var oauthClient = &http.Client{Timeout: 5 * time.Second}
-	resp, err := oauthClient.Get(oauthServer + "/pubkey")
+	pubKey, _, err := getSeedKeys()
 	if err != nil {
-		ctx.ServerError("UserSignIn", err)
-		return
-	}
-	defer resp.Body.Close()
-	err = json.NewDecoder(resp.Body).Decode(&pubkey)
-	if err != nil {
-		ctx.ServerError("UserSignIn", err)
+		ctx.ServerError("SignIn", err)
 		return
 	}
 
+	PubKeyEnc := base64.StdEncoding.EncodeToString(pubKey)
 	encoded := url.Values{}
 	encoded.Set("state", state)
 	encoded.Set("appid", ctx.Req.Request.Host)
 	encoded.Set("scope", `{"user": true, "email": true}`)
 	encoded.Set("redirecturl", "/user/callbackverify")
-	encoded.Set("publickey", pubkey.Publickey)
+	encoded.Set("publickey", PubKeyEnc)
 	redirectUrl.RawQuery = encoded.Encode()
 	if err := ctx.Session.Set("threebotConnectState", state); err != nil {
 		log.Error("Error setting uname in session: %v", err)
@@ -616,13 +637,17 @@ func SignInOAuth(ctx *context.Context) {
 func VerifyCallback( ctx *context.Context) {
 	state := ctx.Session.Get("threebotConnectState").(string)
 	signedAttempt := ctx.Req.Request.URL.Query().Get("signedAttempt")
+
+	if signedAttempt == "" {
+		ctx.ServerError("SignIn", errors.New("Required parameters are incomplete"))
+		return
+	}
 	var signedData SignedData
 	json.Unmarshal([]byte(signedAttempt), &signedData)
+	UsersUrl := threebotConnectServer + "/api/users/" + signedData.DoubleName
+
 	var oauthClient = &http.Client{Timeout: 5 * time.Second}
-	form := OauthForm{State: state, SignedAttempt: signedData}
-	buff := new(bytes.Buffer)
-	json.NewEncoder(buff).Encode(form)
-	resp, err := oauthClient.Post(oauthServer + "/verify", "application/json; charset=utf-8", buff)
+	resp, err := oauthClient.Get(UsersUrl)
 	if err != nil {
 		ctx.ServerError("SignIn", err)
 		return
@@ -635,15 +660,78 @@ func VerifyCallback( ctx *context.Context) {
 		return
 	}
 
+	userPubKey, err := base64.StdEncoding.DecodeString(userData.PublicKey)
+	if err != nil {
+		ctx.ServerError("SignIn", err)
+		return
+	}
+	signedHash, err := base64.StdEncoding.DecodeString(signedData.SignedAttempt)
+	if err != nil {
+		ctx.ServerError("SignIn", err)
+		return
+	}
+
+	var userPubKey32 [32]byte
+	copy(userPubKey32[:], userPubKey)
+	verifiedData, verified:= sign.Open(nil, signedHash, &userPubKey32)
+
+	if !verified {
+		ctx.ServerError("SignIn", errors.New("Error while verifying signature"))
+		return
+	}
+	var threebotData ThreebotData
+	err = json.Unmarshal(verifiedData, &threebotData)
+	if err != nil {
+		ctx.ServerError("SignIn", err)
+		return
+	}
+	if threebotData.State != state {
+		ctx.ServerError("SignIn", errors.New("Invalid state. not matching one in user session"))
+		return
+	}
+	nonce, err := base64.StdEncoding.DecodeString(threebotData.Data.Nonce)
+	cipherText, err := base64.StdEncoding.DecodeString(threebotData.Data.CipherText)
+	if err != nil {
+		ctx.ServerError("SignIn", err)
+		return
+	}
+	userPubKeyCr, exit := cryptosign.CryptoSignEd25519PkToCurve25519(userPubKey[:])
+	if exit > 0 {
+		ctx.ServerError("SignIn", errors.New("Error getting curve public key of user"))
+		return
+	}
+	_, privKeyCr, err := getSeedKeys()
+	if err != nil{
+		ctx.ServerError("SignIn", err)
+		return
+	}
+	var userPubKeyCr32 [32]byte
+	var privKeyCr32 [32]byte
+	var nonce24 [24]byte
+	copy(userPubKeyCr32[:], userPubKeyCr)
+	copy(privKeyCr32[:], privKeyCr)
+	copy(nonce24[:], nonce)
+	decryptedData, success := box.Open(nil, cipherText, &nonce24, &userPubKeyCr32, &privKeyCr32)
+	if !success {
+		ctx.ServerError("SignIn", errors.New("Error while decrypting data"))
+		return
+	}
+	var emailData EmailData
+	err = json.Unmarshal(decryptedData, &emailData)
+	if err != nil {
+		ctx.ServerError("SignIn", err)
+		return
+	}
+
 	// Gets user if it doesn't exist create
-	userName := strings.TrimSuffix(userData.UserName, ".3bot")
+	userName := strings.TrimSuffix(signedData.DoubleName, ".3bot")
 	remember := true
 	user, userErr := models.GetUserByName(userName)
 	if userErr != nil {
 		remember = false
 		user = &models.User{
 			Name:     userName,
-			Email:    userData.Email,
+			Email:    emailData.Email.Email,
 			Passwd:   "",
 			IsActive: true,
 		}
@@ -651,16 +739,16 @@ func VerifyCallback( ctx *context.Context) {
 			switch {
 			case models.IsErrUserAlreadyExist(err):
 				ctx.Data["Err_UserName"] = true
-				ctx.RenderWithErr(ctx.Tr("form.username_been_taken"), tplSignUp, &form)
+				ctx.RenderWithErr(ctx.Tr("form.username_been_taken"), tplSignUp, nil)
 			case models.IsErrEmailAlreadyUsed(err):
 				ctx.Data["Err_Email"] = true
-				ctx.RenderWithErr(ctx.Tr("form.email_been_used"), tplSignUp, &form)
+				ctx.RenderWithErr(ctx.Tr("form.email_been_used"), tplSignUp, nil)
 			case models.IsErrNameReserved(err):
 				ctx.Data["Err_UserName"] = true
-				ctx.RenderWithErr(ctx.Tr("user.form.name_reserved", err.(models.ErrNameReserved).Name), tplSignUp, &form)
+				ctx.RenderWithErr(ctx.Tr("user.form.name_reserved", err.(models.ErrNameReserved).Name), tplSignUp, nil)
 			case models.IsErrNamePatternNotAllowed(err):
 				ctx.Data["Err_UserName"] = true
-				ctx.RenderWithErr(ctx.Tr("user.form.name_pattern_not_allowed", err.(models.ErrNamePatternNotAllowed).Pattern), tplSignUp, &form)
+				ctx.RenderWithErr(ctx.Tr("user.form.name_pattern_not_allowed", err.(models.ErrNamePatternNotAllowed).Pattern), tplSignUp, nil)
 			default:
 				ctx.ServerError("CreateUser", err)
 			}
