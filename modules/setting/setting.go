@@ -158,6 +158,7 @@ var (
 	OnlyAllowPushIfGiteaEnvironmentSet bool
 	PasswordComplexity                 []string
 	PasswordHashAlgo                   string
+	OauthSeed                          string
 
 	// UI settings
 	UI = struct {
@@ -825,6 +826,7 @@ func NewContext() {
 	OnlyAllowPushIfGiteaEnvironmentSet = sec.Key("ONLY_ALLOW_PUSH_IF_GITEA_ENVIRONMENT_SET").MustBool(true)
 	PasswordHashAlgo = sec.Key("PASSWORD_HASH_ALGO").MustString("pbkdf2")
 	CSRFCookieHTTPOnly = sec.Key("CSRF_COOKIE_HTTP_ONLY").MustBool(true)
+	OauthSeed = sec.Key("OAUTH_SEED").MustString("aKQ1v9QAy9iq1o3ZSzyIgJT6qVZ4wASn")
 
 	InternalToken = loadInternalToken(sec)
 
