@@ -40,7 +40,6 @@ RUN apk --no-cache add \
     tzdata \
     gnupg\
     pkgconfig\
-    libsodium\
     libsodium-dev
 
 RUN addgroup \
