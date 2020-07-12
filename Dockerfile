@@ -1,4 +1,3 @@
-
 ###################################
 #Build stage
 FROM golang:1.14-alpine3.12 AS build-env
@@ -12,7 +11,7 @@ ENV TAGS "bindata $TAGS"
 ARG CGO_EXTRA_CFLAGS
 
 #Build deps
-RUN apk --no-cache add build-base git nodejs npm pkgconfig libsodium libsodium-dev
+RUN apk --no-cache add build-base git nodejs npm pkgconfig libsodium-dev
 
 #Setup repo
 COPY . ${GOPATH}/src/code.gitea.io/gitea
@@ -67,5 +66,3 @@ CMD ["/bin/s6-svscan", "/etc/s6"]
 COPY docker/root /
 COPY --from=build-env /go/src/code.gitea.io/gitea/gitea /app/gitea/gitea
 RUN ln -s /app/gitea/gitea /usr/local/bin/gitea
-
-
