@@ -12,7 +12,7 @@ ENV TAGS "bindata $TAGS"
 ARG CGO_EXTRA_CFLAGS
 
 #Build deps
-RUN apk --no-cache add build-base git nodejs npm
+RUN apk --no-cache add build-base git nodejs npm pkgconfig libsodium libsodium-dev
 
 #Setup repo
 COPY . ${GOPATH}/src/code.gitea.io/gitea
@@ -39,7 +39,10 @@ RUN apk --no-cache add \
     sqlite \
     su-exec \
     tzdata \
-    gnupg
+    gnupg\
+    pkgconfig\
+    libsodium\
+    libsodium-dev
 
 RUN addgroup \
     -S -g 1000 \
@@ -64,3 +67,5 @@ CMD ["/bin/s6-svscan", "/etc/s6"]
 COPY docker/root /
 COPY --from=build-env /go/src/code.gitea.io/gitea/gitea /app/gitea/gitea
 RUN ln -s /app/gitea/gitea /usr/local/bin/gitea
+
+
