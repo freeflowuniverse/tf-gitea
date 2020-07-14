@@ -190,9 +190,14 @@ func SignIn(ctx *context.Context) {
 	}
 
 	PubKeyEnc := base64.StdEncoding.EncodeToString(pubKey)
+	appId := ctx.Req.Request.Header.Get("X-Forwarded-For")
+	if appId == "" {
+		appId = ctx.Req.Request.Host
+	}
+
 	encoded := url.Values{}
 	encoded.Set("state", state)
-	encoded.Set("appid", ctx.Req.Request.Host)
+	encoded.Set("appid", strings.Split(appId, ",")[0])
 	encoded.Set("scope", `{"user": true, "email": true}`)
 	encoded.Set("redirecturl", "/user/callbackverify")
 	encoded.Set("publickey", PubKeyEnc)
