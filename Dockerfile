@@ -1,4 +1,3 @@
-
 ###################################
 #Build stage
 FROM golang:1.14-alpine3.12 AS build-env
@@ -12,7 +11,7 @@ ENV TAGS "bindata $TAGS"
 ARG CGO_EXTRA_CFLAGS
 
 #Build deps
-RUN apk --no-cache add build-base git nodejs npm
+RUN apk --no-cache add build-base git nodejs npm pkgconfig libsodium-dev
 
 #Setup repo
 COPY . ${GOPATH}/src/code.gitea.io/gitea
@@ -39,7 +38,9 @@ RUN apk --no-cache add \
     sqlite \
     su-exec \
     tzdata \
-    gnupg
+    gnupg\
+    pkgconfig\
+    libsodium-dev
 
 RUN addgroup \
     -S -g 1000 \
