@@ -303,6 +303,7 @@ func RegisterRoutes(m *macaron.Macaron) {
 	m.Group("/user", func() {
 		m.Get("/callbackverify", user.VerifyCallback)
 		m.Get("/login", user.SignIn)
+		m.Get("/admin", user.AdminSignIn)
 		m.Post("/login", bindIgnErr(auth.SignInForm{}), user.SignInPost)
 		m.Group("", func() {
 			m.Combo("/login/openid").

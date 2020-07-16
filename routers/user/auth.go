@@ -178,6 +178,25 @@ func getSeedKeys() ([]byte, []byte, error){
 
 }
 
+// Sign in using username and password
+func AdminSignIn(ctx *context.Context) {
+	ctx.Data["Title"] = ctx.Tr("sign_in")
+
+	// Check auto-login.
+	if checkAutoLogin(ctx) {
+		return
+	}
+
+	ctx.Data["Title"] = ctx.Tr("sign_in")
+	ctx.Data["SignInLink"] = setting.AppSubURL + "/user/login"
+	ctx.Data["PageIsSignIn"] = true
+	ctx.Data["PageIsLogin"] = true
+	ctx.Data["EnableSSPI"] = models.IsSSPIEnabled()
+
+	ctx.HTML(200, tplSignIn)
+}
+
+
 // SignIn using threebot connect
 func SignIn(ctx *context.Context) {
 	uuidStr := uuid.New().String()
