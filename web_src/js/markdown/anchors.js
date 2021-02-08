@@ -1,4 +1,4 @@
-import {svg} from '../utils.js';
+import {svg} from '../svg.js';
 
 const headingSelector = '.markdown h1, .markdown h2, .markdown h3, .markdown h4, .markdown h5, .markdown h6';
 
@@ -23,7 +23,7 @@ export default function initMarkdownAnchors() {
     const a = document.createElement('a');
     a.classList.add('anchor');
     a.setAttribute('href', `#${encodeURIComponent(originalId)}`);
-    a.innerHTML = svg('octicon-link', 16);
+    a.innerHTML = svg('octicon-link');
     heading.prepend(a);
   }
 

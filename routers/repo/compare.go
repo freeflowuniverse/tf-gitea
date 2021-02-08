@@ -9,16 +9,15 @@ import (
 	"fmt"
 	"html"
 	"path"
-	"path/filepath"
 	"strings"
 
 	"code.gitea.io/gitea/models"
 	"code.gitea.io/gitea/modules/base"
 	"code.gitea.io/gitea/modules/context"
 	"code.gitea.io/gitea/modules/git"
-	"code.gitea.io/gitea/modules/highlight"
 	"code.gitea.io/gitea/modules/log"
 	"code.gitea.io/gitea/modules/setting"
+	"code.gitea.io/gitea/modules/upload"
 	"code.gitea.io/gitea/services/gitdiff"
 )
 
@@ -576,12 +575,12 @@ func CompareDiff(ctx *context.Context) {
 
 	ctx.Data["IsRepoToolbarCommits"] = true
 	ctx.Data["IsDiffCompare"] = true
-	ctx.Data["RequireHighlightJS"] = true
 	ctx.Data["RequireTribute"] = true
 	ctx.Data["RequireSimpleMDE"] = true
 	ctx.Data["PullRequestWorkInProgressPrefixes"] = setting.Repository.PullRequest.WorkInProgressPrefixes
-	setTemplateIfExists(ctx, pullRequestTemplateKey, pullRequestTemplateCandidates)
-	renderAttachmentSettings(ctx)
+	setTemplateIfExists(ctx, pullRequestTemplateKey, nil, pullRequestTemplateCandidates)
+	ctx.Data["IsAttachmentEnabled"] = setting.Attachment.Enabled
+	upload.AddUploadContext(ctx, "comment")
 
 	ctx.Data["HasIssuesOrPullsWritePermission"] = ctx.Repo.CanWrite(models.UnitTypePullRequests)
 
@@ -601,14 +600,15 @@ func ExcerptBlob(ctx *context.Context) {
 	direction := ctx.Query("direction")
 	filePath := ctx.Query("path")
 	gitRepo := ctx.Repo.GitRepo
-	chunkSize := gitdiff.BlobExceprtChunkSize
+	chunkSize := gitdiff.BlobExcerptChunkSize
 	commit, err := gitRepo.GetCommit(commitID)
 	if err != nil {
 		ctx.Error(500, "GetCommit")
 		return
 	}
 	section := &gitdiff.DiffSection{
-		Name: filePath,
+		FileName: filePath,
+		Name:     filePath,
 	}
 	if direction == "up" && (idxLeft-lastLeft) > chunkSize {
 		idxLeft -= chunkSize
@@ -657,7 +657,6 @@ func ExcerptBlob(ctx *context.Context) {
 	}
 	ctx.Data["section"] = section
 	ctx.Data["fileName"] = filePath
-	ctx.Data["highlightClass"] = highlight.FileNameToHighlightClass(filepath.Base(filePath))
 	ctx.Data["AfterCommitID"] = commitID
 	ctx.Data["Anchor"] = anchor
 	ctx.HTML(200, tplBlobExcerpt)

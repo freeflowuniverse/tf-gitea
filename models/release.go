@@ -35,6 +35,7 @@ type Release struct {
 	NumCommits       int64
 	NumCommitsBehind int64              `xorm:"-"`
 	Note             string             `xorm:"TEXT"`
+	RenderedNote     string             `xorm:"-"`
 	IsDraft          bool               `xorm:"NOT NULL DEFAULT false"`
 	IsPrerelease     bool               `xorm:"NOT NULL DEFAULT false"`
 	IsTag            bool               `xorm:"NOT NULL DEFAULT false"`
@@ -53,7 +54,11 @@ func (r *Release) loadAttributes(e Engine) error {
 	if r.Publisher == nil {
 		r.Publisher, err = getUserByID(e, r.PublisherID)
 		if err != nil {
-			return err
+			if IsErrUserNotExist(err) {
+				r.Publisher = NewGhostUser()
+			} else {
+				return err
+			}
 		}
 	}
 	return getReleaseAttachments(e, r)

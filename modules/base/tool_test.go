@@ -46,6 +46,12 @@ func TestBasicAuthDecode(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "foo", user)
 	assert.Equal(t, "bar", pass)
+
+	_, _, err = BasicAuthDecode("aW52YWxpZA==")
+	assert.Error(t, err)
+
+	_, _, err = BasicAuthDecode("invalid")
+	assert.Error(t, err)
 }
 
 func TestBasicAuthEncode(t *testing.T) {
@@ -221,6 +227,14 @@ func TestIsLetter(t *testing.T) {
 func TestIsTextFile(t *testing.T) {
 	assert.True(t, IsTextFile([]byte{}))
 	assert.True(t, IsTextFile([]byte("lorem ipsum")))
+}
+
+func TestFormatNumberSI(t *testing.T) {
+	assert.Equal(t, "125", FormatNumberSI(int(125)))
+	assert.Equal(t, "1.3k", FormatNumberSI(int64(1317)))
+	assert.Equal(t, "21.3M", FormatNumberSI(21317675))
+	assert.Equal(t, "45.7G", FormatNumberSI(45721317675))
+	assert.Equal(t, "", FormatNumberSI("test"))
 }
 
 // TODO: IsImageFile(), currently no idea how to test
