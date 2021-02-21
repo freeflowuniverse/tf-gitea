@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -65,6 +66,11 @@ func BasicAuthDecode(encoded string) (string, string, error) {
 	}
 
 	auth := strings.SplitN(string(s), ":", 2)
+
+	if len(auth) != 2 {
+		return "", "", errors.New("invalid basic authentication")
+	}
+
 	return auth[0], auth[1], nil
 }
 
@@ -387,7 +393,7 @@ func EntryIcon(entry *git.TreeEntry) string {
 			return "file-symlink-file"
 		}
 		if te.IsDir() {
-			return "file-symlink-directory"
+			return "file-submodule"
 		}
 		return "file-symlink-file"
 	case entry.IsDir():
@@ -419,4 +425,28 @@ func SetupGiteaRoot() string {
 		}
 	}
 	return giteaRoot
+}
+
+// FormatNumberSI format a number
+func FormatNumberSI(data interface{}) string {
+	var num int64
+	if num1, ok := data.(int64); ok {
+		num = num1
+	} else if num1, ok := data.(int); ok {
+		num = int64(num1)
+	} else {
+		return ""
+	}
+
+	if num < 1000 {
+		return fmt.Sprintf("%d", num)
+	} else if num < 1000000 {
+		num2 := float32(num) / float32(1000.0)
+		return fmt.Sprintf("%.1fk", num2)
+	} else if num < 1000000000 {
+		num2 := float32(num) / float32(1000000.0)
+		return fmt.Sprintf("%.1fM", num2)
+	}
+	num2 := float32(num) / float32(1000000000.0)
+	return fmt.Sprintf("%.1fG", num2)
 }

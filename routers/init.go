@@ -24,29 +24,34 @@ import (
 	"code.gitea.io/gitea/modules/log"
 	"code.gitea.io/gitea/modules/markup"
 	"code.gitea.io/gitea/modules/markup/external"
+	repo_migrations "code.gitea.io/gitea/modules/migrations"
 	"code.gitea.io/gitea/modules/notification"
 	"code.gitea.io/gitea/modules/options"
 	"code.gitea.io/gitea/modules/setting"
 	"code.gitea.io/gitea/modules/ssh"
+	"code.gitea.io/gitea/modules/storage"
+	"code.gitea.io/gitea/modules/svg"
 	"code.gitea.io/gitea/modules/task"
 	"code.gitea.io/gitea/modules/webhook"
 	"code.gitea.io/gitea/services/mailer"
 	mirror_service "code.gitea.io/gitea/services/mirror"
 	pull_service "code.gitea.io/gitea/services/pull"
+	"code.gitea.io/gitea/services/repository"
 
 	"gitea.com/macaron/i18n"
 	"gitea.com/macaron/macaron"
-	unknwoni18n "github.com/unknwon/i18n"
 )
 
 func checkRunMode() {
 	switch setting.Cfg.Section("").Key("RUN_MODE").String() {
-	case "prod":
+	case "dev":
+		git.Debug = true
+	case "test":
+		git.Debug = true
+	default:
 		macaron.Env = macaron.PROD
 		macaron.ColorLog = false
 		setting.ProdMode = true
-	default:
-		git.Debug = true
 	}
 	log.Info("Run Mode: %s", strings.Title(macaron.Env))
 }
@@ -54,6 +59,12 @@ func checkRunMode() {
 // NewServices init new services
 func NewServices() {
 	setting.NewServices()
+	if err := storage.Init(); err != nil {
+		log.Fatal("storage init failed: %v", err)
+	}
+	if err := repository.NewContext(); err != nil {
+		log.Fatal("repository init failed: %v", err)
+	}
 	mailer.NewContext()
 	_ = cache.NewContext()
 	notification.NewContext()
@@ -99,13 +110,15 @@ func InitLocales() {
 		}
 	}
 	i18n.I18n(i18n.Options{
-		SubURL:       setting.AppSubURL,
-		Files:        localFiles,
-		Langs:        setting.Langs,
-		Names:        setting.Names,
-		DefaultLang:  "en-US",
-		Redirect:     false,
-		CookieDomain: setting.SessionConfig.Domain,
+		SubURL:         setting.AppSubURL,
+		Files:          localFiles,
+		Langs:          setting.Langs,
+		Names:          setting.Names,
+		DefaultLang:    "en-US",
+		Redirect:       false,
+		CookieHttpOnly: true,
+		Secure:         setting.SessionConfig.Secure,
+		CookieDomain:   setting.SessionConfig.Domain,
 	})
 }
 
@@ -123,8 +136,6 @@ func GlobalInit(ctx context.Context) {
 
 	// Setup i18n
 	InitLocales()
-
-	log.Info("%s", unknwoni18n.Tr("en-US", "admin.dashboard.delete_repo_archives"))
 
 	NewServices()
 
@@ -166,6 +177,10 @@ func GlobalInit(ctx context.Context) {
 	}
 	checkRunMode()
 
+	if err := repo_migrations.Init(); err != nil {
+		log.Fatal("Failed to initialize repository migrations: %v", err)
+	}
+
 	// Now because Install will re-run GlobalInit once it has set InstallLock
 	// we can't tell if the ssh port will remain unused until that's done.
 	// However, see FIXME comment in install.go
@@ -181,4 +196,6 @@ func GlobalInit(ctx context.Context) {
 	if setting.InstallLock {
 		sso.Init()
 	}
+
+	svg.Init()
 }

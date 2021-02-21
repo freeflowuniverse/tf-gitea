@@ -227,6 +227,7 @@ func getCommitStatuses(ctx *context.APIContext, sha string) {
 
 	ctx.SetLinkHeader(int(maxResults), listOptions.PageSize)
 	ctx.Header().Set("X-Total-Count", fmt.Sprintf("%d", maxResults))
+	ctx.Header().Set("Access-Control-Expose-Headers", "X-Total-Count, Link")
 
 	ctx.JSON(http.StatusOK, apiStatuses)
 }
@@ -243,7 +244,7 @@ type combinedCommitStatus struct {
 
 // GetCombinedCommitStatusByRef returns the combined status for any given commit hash
 func GetCombinedCommitStatusByRef(ctx *context.APIContext) {
-	// swagger:operation GET /repos/{owner}/{repo}/commits/{ref}/statuses repository repoGetCombinedStatusByRef
+	// swagger:operation GET /repos/{owner}/{repo}/commits/{ref}/status repository repoGetCombinedStatusByRef
 	// ---
 	// summary: Get a commit's combined status, by branch/tag/commit reference
 	// produces:
@@ -271,7 +272,7 @@ func GetCombinedCommitStatusByRef(ctx *context.APIContext) {
 	//   required: false
 	// responses:
 	//   "200":
-	//     "$ref": "#/responses/Status"
+	//     "$ref": "#/responses/CombinedStatus"
 	//   "400":
 	//     "$ref": "#/responses/error"
 
@@ -291,7 +292,7 @@ func GetCombinedCommitStatusByRef(ctx *context.APIContext) {
 	}
 
 	if len(statuses) == 0 {
-		ctx.Status(http.StatusOK)
+		ctx.JSON(http.StatusOK, &api.CombinedStatus{})
 		return
 	}
 

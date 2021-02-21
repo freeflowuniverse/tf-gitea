@@ -23,7 +23,12 @@ func NewIssue(repo *models.Repository, issue *models.Issue, labelIDs []int64, uu
 		}
 	}
 
-	notification.NotifyNewIssue(issue)
+	mentions, err := issue.FindAndUpdateIssueMentions(models.DefaultDBContext(), issue.Poster, issue.Content)
+	if err != nil {
+		return err
+	}
+
+	notification.NotifyNewIssue(issue, mentions)
 
 	return nil
 }
@@ -38,6 +43,20 @@ func ChangeTitle(issue *models.Issue, doer *models.User, title string) (err erro
 	}
 
 	notification.NotifyIssueChangeTitle(doer, issue, oldTitle)
+
+	return nil
+}
+
+// ChangeIssueRef changes the branch of this issue, as the given user.
+func ChangeIssueRef(issue *models.Issue, doer *models.User, ref string) error {
+	oldRef := issue.Ref
+	issue.Ref = ref
+
+	if err := issue.ChangeRef(doer, oldRef); err != nil {
+		return err
+	}
+
+	notification.NotifyIssueChangeRef(doer, issue, oldRef)
 
 	return nil
 }

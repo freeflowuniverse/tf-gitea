@@ -17,63 +17,73 @@ import (
 type (
 	// FeishuPayload represents
 	FeishuPayload struct {
-		Title string `json:"title"`
-		Text  string `json:"text"`
+		MsgType string `json:"msg_type"` // text / post / image / share_chat / interactive
+		Content struct {
+			Text string `json:"text"`
+		} `json:"content"`
 	}
 )
 
+func newFeishuTextPayload(text string) *FeishuPayload {
+	return &FeishuPayload{
+		MsgType: "text",
+		Content: struct {
+			Text string `json:"text"`
+		}{
+			Text: text,
+		},
+	}
+}
+
 // SetSecret sets the Feishu secret
-func (p *FeishuPayload) SetSecret(_ string) {}
+func (f *FeishuPayload) SetSecret(_ string) {}
 
 // JSONPayload Marshals the FeishuPayload to json
-func (p *FeishuPayload) JSONPayload() ([]byte, error) {
-	data, err := json.MarshalIndent(p, "", "  ")
+func (f *FeishuPayload) JSONPayload() ([]byte, error) {
+	data, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
 		return []byte{}, err
 	}
 	return data, nil
 }
 
-func getFeishuCreatePayload(p *api.CreatePayload) (*FeishuPayload, error) {
+var (
+	_ PayloadConvertor = &FeishuPayload{}
+)
+
+// Create implements PayloadConvertor Create method
+func (f *FeishuPayload) Create(p *api.CreatePayload) (api.Payloader, error) {
 	// created tag/branch
 	refName := git.RefEndName(p.Ref)
-	title := fmt.Sprintf("[%s] %s %s created", p.Repo.FullName, p.RefType, refName)
+	text := fmt.Sprintf("[%s] %s %s created", p.Repo.FullName, p.RefType, refName)
 
-	return &FeishuPayload{
-		Text:  title,
-		Title: title,
-	}, nil
+	return newFeishuTextPayload(text), nil
 }
 
-func getFeishuDeletePayload(p *api.DeletePayload) (*FeishuPayload, error) {
+// Delete implements PayloadConvertor Delete method
+func (f *FeishuPayload) Delete(p *api.DeletePayload) (api.Payloader, error) {
 	// created tag/branch
 	refName := git.RefEndName(p.Ref)
-	title := fmt.Sprintf("[%s] %s %s deleted", p.Repo.FullName, p.RefType, refName)
+	text := fmt.Sprintf("[%s] %s %s deleted", p.Repo.FullName, p.RefType, refName)
 
-	return &FeishuPayload{
-		Text:  title,
-		Title: title,
-	}, nil
+	return newFeishuTextPayload(text), nil
 }
 
-func getFeishuForkPayload(p *api.ForkPayload) (*FeishuPayload, error) {
-	title := fmt.Sprintf("%s is forked to %s", p.Forkee.FullName, p.Repo.FullName)
+// Fork implements PayloadConvertor Fork method
+func (f *FeishuPayload) Fork(p *api.ForkPayload) (api.Payloader, error) {
+	text := fmt.Sprintf("%s is forked to %s", p.Forkee.FullName, p.Repo.FullName)
 
-	return &FeishuPayload{
-		Text:  title,
-		Title: title,
-	}, nil
+	return newFeishuTextPayload(text), nil
 }
 
-func getFeishuPushPayload(p *api.PushPayload) (*FeishuPayload, error) {
+// Push implements PayloadConvertor Push method
+func (f *FeishuPayload) Push(p *api.PushPayload) (api.Payloader, error) {
 	var (
 		branchName = git.RefEndName(p.Ref)
 		commitDesc string
 	)
 
-	title := fmt.Sprintf("[%s:%s] %s", p.Repo.FullName, branchName, commitDesc)
-
-	var text string
+	var text = fmt.Sprintf("[%s:%s] %s\n", p.Repo.FullName, branchName, commitDesc)
 	// for each commit, generate attachment text
 	for i, commit := range p.Commits {
 		var authorName string
@@ -88,40 +98,32 @@ func getFeishuPushPayload(p *api.PushPayload) (*FeishuPayload, error) {
 		}
 	}
 
-	return &FeishuPayload{
-		Text:  text,
-		Title: title,
-	}, nil
+	return newFeishuTextPayload(text), nil
 }
 
-func getFeishuIssuesPayload(p *api.IssuePayload) (*FeishuPayload, error) {
+// Issue implements PayloadConvertor Issue method
+func (f *FeishuPayload) Issue(p *api.IssuePayload) (api.Payloader, error) {
 	text, issueTitle, attachmentText, _ := getIssuesPayloadInfo(p, noneLinkFormatter, true)
 
-	return &FeishuPayload{
-		Text:  text + "\r\n\r\n" + attachmentText,
-		Title: issueTitle,
-	}, nil
+	return newFeishuTextPayload(issueTitle + "\r\n" + text + "\r\n\r\n" + attachmentText), nil
 }
 
-func getFeishuIssueCommentPayload(p *api.IssueCommentPayload) (*FeishuPayload, error) {
+// IssueComment implements PayloadConvertor IssueComment method
+func (f *FeishuPayload) IssueComment(p *api.IssueCommentPayload) (api.Payloader, error) {
 	text, issueTitle, _ := getIssueCommentPayloadInfo(p, noneLinkFormatter, true)
 
-	return &FeishuPayload{
-		Text:  text + "\r\n\r\n" + p.Comment.Body,
-		Title: issueTitle,
-	}, nil
+	return newFeishuTextPayload(issueTitle + "\r\n" + text + "\r\n\r\n" + p.Comment.Body), nil
 }
 
-func getFeishuPullRequestPayload(p *api.PullRequestPayload) (*FeishuPayload, error) {
+// PullRequest implements PayloadConvertor PullRequest method
+func (f *FeishuPayload) PullRequest(p *api.PullRequestPayload) (api.Payloader, error) {
 	text, issueTitle, attachmentText, _ := getPullRequestPayloadInfo(p, noneLinkFormatter, true)
 
-	return &FeishuPayload{
-		Text:  text + "\r\n\r\n" + attachmentText,
-		Title: issueTitle,
-	}, nil
+	return newFeishuTextPayload(issueTitle + "\r\n" + text + "\r\n\r\n" + attachmentText), nil
 }
 
-func getFeishuPullRequestApprovalPayload(p *api.PullRequestPayload, event models.HookEventType) (*FeishuPayload, error) {
+// Review implements PayloadConvertor Review method
+func (f *FeishuPayload) Review(p *api.PullRequestPayload, event models.HookEventType) (api.Payloader, error) {
 	var text, title string
 	switch p.Action {
 	case api.HookIssueSynchronized:
@@ -135,71 +137,32 @@ func getFeishuPullRequestApprovalPayload(p *api.PullRequestPayload, event models
 
 	}
 
-	return &FeishuPayload{
-		Text:  title + "\r\n\r\n" + text,
-		Title: title,
-	}, nil
+	return newFeishuTextPayload(title + "\r\n\r\n" + text), nil
 }
 
-func getFeishuRepositoryPayload(p *api.RepositoryPayload) (*FeishuPayload, error) {
-	var title string
+// Repository implements PayloadConvertor Repository method
+func (f *FeishuPayload) Repository(p *api.RepositoryPayload) (api.Payloader, error) {
+	var text string
 	switch p.Action {
 	case api.HookRepoCreated:
-		title = fmt.Sprintf("[%s] Repository created", p.Repository.FullName)
-		return &FeishuPayload{
-			Text:  title,
-			Title: title,
-		}, nil
+		text = fmt.Sprintf("[%s] Repository created", p.Repository.FullName)
+		return newFeishuTextPayload(text), nil
 	case api.HookRepoDeleted:
-		title = fmt.Sprintf("[%s] Repository deleted", p.Repository.FullName)
-		return &FeishuPayload{
-			Title: title,
-			Text:  title,
-		}, nil
+		text = fmt.Sprintf("[%s] Repository deleted", p.Repository.FullName)
+		return newFeishuTextPayload(text), nil
 	}
 
 	return nil, nil
 }
 
-func getFeishuReleasePayload(p *api.ReleasePayload) (*FeishuPayload, error) {
+// Release implements PayloadConvertor Release method
+func (f *FeishuPayload) Release(p *api.ReleasePayload) (api.Payloader, error) {
 	text, _ := getReleasePayloadInfo(p, noneLinkFormatter, true)
 
-	return &FeishuPayload{
-		Text:  text,
-		Title: text,
-	}, nil
+	return newFeishuTextPayload(text), nil
 }
 
 // GetFeishuPayload converts a ding talk webhook into a FeishuPayload
-func GetFeishuPayload(p api.Payloader, event models.HookEventType, meta string) (*FeishuPayload, error) {
-	s := new(FeishuPayload)
-
-	switch event {
-	case models.HookEventCreate:
-		return getFeishuCreatePayload(p.(*api.CreatePayload))
-	case models.HookEventDelete:
-		return getFeishuDeletePayload(p.(*api.DeletePayload))
-	case models.HookEventFork:
-		return getFeishuForkPayload(p.(*api.ForkPayload))
-	case models.HookEventIssues:
-		return getFeishuIssuesPayload(p.(*api.IssuePayload))
-	case models.HookEventIssueComment, models.HookEventPullRequestComment:
-		pl, ok := p.(*api.IssueCommentPayload)
-		if ok {
-			return getFeishuIssueCommentPayload(pl)
-		}
-		return getFeishuPullRequestPayload(p.(*api.PullRequestPayload))
-	case models.HookEventPush:
-		return getFeishuPushPayload(p.(*api.PushPayload))
-	case models.HookEventPullRequest:
-		return getFeishuPullRequestPayload(p.(*api.PullRequestPayload))
-	case models.HookEventPullRequestReviewApproved, models.HookEventPullRequestReviewRejected:
-		return getFeishuPullRequestApprovalPayload(p.(*api.PullRequestPayload), event)
-	case models.HookEventRepository:
-		return getFeishuRepositoryPayload(p.(*api.RepositoryPayload))
-	case models.HookEventRelease:
-		return getFeishuReleasePayload(p.(*api.ReleasePayload))
-	}
-
-	return s, nil
+func GetFeishuPayload(p api.Payloader, event models.HookEventType, meta string) (api.Payloader, error) {
+	return convertPayloader(new(FeishuPayload), p, event)
 }

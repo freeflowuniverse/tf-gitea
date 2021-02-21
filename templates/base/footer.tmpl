@@ -28,11 +28,11 @@
 	{{if eq .CaptchaType "recaptcha"}}
 		<script src='{{ URLJoin .RecaptchaURL "api.js"}}' async></script>
 	{{end}}
+	{{if eq .CaptchaType "hcaptcha"}}
+		<script src='https://hcaptcha.com/1/api.js' async></script>
+	{{end}}
 {{end}}
 	<script src="{{StaticUrlPrefix}}/js/index.js?v={{MD5 AppVer}}"></script>
-{{if .RequireMinicolors}}
-	<script src="{{StaticUrlPrefix}}/vendor/plugins/jquery.minicolors/jquery.minicolors.min.js"></script>
-{{end}}
 {{template "custom/footer" .}}
 </body>
 </html>

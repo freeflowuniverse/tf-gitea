@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"code.gitea.io/gitea/modules/base"
+	"code.gitea.io/gitea/modules/git"
 	"code.gitea.io/gitea/modules/log"
 	"code.gitea.io/gitea/modules/setting"
 	"code.gitea.io/gitea/modules/timeutil"
@@ -49,6 +50,7 @@ const (
 	ActionApprovePullRequest                       // 21
 	ActionRejectPullRequest                        // 22
 	ActionCommentPull                              // 23
+	ActionPublishRelease                           // 24
 )
 
 // Action represents user operation type and other information to
@@ -242,7 +244,7 @@ func (a *Action) getCommentLink(e Engine) string {
 
 // GetBranch returns the action's repository branch.
 func (a *Action) GetBranch() string {
-	return a.RefName
+	return strings.TrimPrefix(a.RefName, git.BranchPrefix)
 }
 
 // GetContent returns the action's content.
@@ -338,9 +340,9 @@ func GetFeeds(opts GetFeedsOptions) ([]*Action, error) {
 		cond = cond.And(builder.Eq{"is_deleted": false})
 	}
 
-	actions := make([]*Action, 0, 20)
+	actions := make([]*Action, 0, setting.UI.FeedPagingNum)
 
-	if err := x.Limit(20).Desc("id").Where(cond).Find(&actions); err != nil {
+	if err := x.Limit(setting.UI.FeedPagingNum).Desc("id").Where(cond).Find(&actions); err != nil {
 		return nil, fmt.Errorf("Find: %v", err)
 	}
 

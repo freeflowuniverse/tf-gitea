@@ -14,6 +14,7 @@ import (
 
 	"code.gitea.io/gitea/modules/base"
 	"code.gitea.io/gitea/modules/log"
+	"code.gitea.io/gitea/modules/references"
 	"code.gitea.io/gitea/modules/setting"
 	"code.gitea.io/gitea/modules/structs"
 	api "code.gitea.io/gitea/modules/structs"
@@ -41,6 +42,7 @@ type Issue struct {
 	Labels           []*Label   `xorm:"-"`
 	MilestoneID      int64      `xorm:"INDEX"`
 	Milestone        *Milestone `xorm:"-"`
+	Project          *Project   `xorm:"-"`
 	Priority         int
 	AssigneeID       int64        `xorm:"-"`
 	Assignee         *User        `xorm:"-"`
@@ -66,6 +68,9 @@ type Issue struct {
 	// IsLocked limits commenting abilities to users on an issue
 	// with write access
 	IsLocked bool `xorm:"NOT NULL DEFAULT false"`
+
+	// For view issue page.
+	ShowTag CommentTag `xorm:"-"`
 }
 
 var (
@@ -271,6 +276,10 @@ func (issue *Issue) loadAttributes(e Engine) (err error) {
 	}
 
 	if err = issue.loadMilestone(e); err != nil {
+		return
+	}
+
+	if err = issue.loadProject(e); err != nil {
 		return
 	}
 
@@ -541,6 +550,11 @@ func (issue *Issue) ReplaceLabels(labels []*Label, doer *User) (err error) {
 		}
 	}
 
+	issue.Labels = nil
+	if err = issue.loadLabels(sess); err != nil {
+		return err
+	}
+
 	return sess.Commit()
 }
 
@@ -699,6 +713,22 @@ func (issue *Issue) ChangeTitle(doer *User, oldTitle string) (err error) {
 	}
 	if err = issue.addCrossReferences(sess, doer, true); err != nil {
 		return err
+	}
+
+	return sess.Commit()
+}
+
+// ChangeRef changes the branch of this issue, as the given user.
+func (issue *Issue) ChangeRef(doer *User, oldRef string) (err error) {
+	sess := x.NewSession()
+	defer sess.Close()
+
+	if err = sess.Begin(); err != nil {
+		return err
+	}
+
+	if err = updateIssueCols(sess, issue, "ref"); err != nil {
+		return fmt.Errorf("updateIssueCols: %v", err)
 	}
 
 	return sess.Commit()
@@ -1062,6 +1092,8 @@ type IssuesOptions struct {
 	PosterID           int64
 	MentionedID        int64
 	MilestoneIDs       []int64
+	ProjectID          int64
+	ProjectBoardID     int64
 	IsClosed           util.OptionalBool
 	IsPull             util.OptionalBool
 	LabelIDs           []int64
@@ -1147,6 +1179,19 @@ func (opts *IssuesOptions) setupSession(sess *xorm.Session) {
 		sess.In("issue.milestone_id", opts.MilestoneIDs)
 	}
 
+	if opts.ProjectID > 0 {
+		sess.Join("INNER", "project_issue", "issue.id = project_issue.issue_id").
+			And("project_issue.project_id=?", opts.ProjectID)
+	}
+
+	if opts.ProjectBoardID != 0 {
+		if opts.ProjectBoardID > 0 {
+			sess.In("issue.id", builder.Select("issue_id").From("project_issue").Where(builder.Eq{"project_board_id": opts.ProjectBoardID}))
+		} else {
+			sess.In("issue.id", builder.Select("issue_id").From("project_issue").Where(builder.Eq{"project_board_id": 0}))
+		}
+	}
+
 	switch opts.IsPull {
 	case util.OptionalBoolTrue:
 		sess.And("issue.is_pull=?", true)
@@ -1227,7 +1272,7 @@ func Issues(opts *IssuesOptions) ([]*Issue, error) {
 	opts.setupSession(sess)
 	sortIssuesSession(sess, opts.SortType, opts.PriorityRepoID)
 
-	issues := make([]*Issue, 0, setting.UI.IssuePagingNum)
+	issues := make([]*Issue, 0, opts.ListOptions.PageSize)
 	if err := sess.Find(&issues); err != nil {
 		return nil, fmt.Errorf("Find: %v", err)
 	}
@@ -1238,6 +1283,27 @@ func Issues(opts *IssuesOptions) ([]*Issue, error) {
 	}
 
 	return issues, nil
+}
+
+// CountIssues number return of issues by given conditions.
+func CountIssues(opts *IssuesOptions) (int64, error) {
+	sess := x.NewSession()
+	defer sess.Close()
+
+	countsSlice := make([]*struct {
+		RepoID int64
+		Count  int64
+	}, 0, 1)
+
+	sess.Select("COUNT(issue.id) AS count").Table("issue")
+	opts.setupSession(sess)
+	if err := sess.Find(&countsSlice); err != nil {
+		return 0, fmt.Errorf("Find: %v", err)
+	}
+	if len(countsSlice) < 1 {
+		return 0, fmt.Errorf("there is less than one result sql record")
+	}
+	return countsSlice[0].Count, nil
 }
 
 // GetParticipantsIDsByIssueID returns the IDs of all users who participated in comments of an issue,
@@ -1426,6 +1492,7 @@ type UserIssueStatsOptions struct {
 	IsPull      bool
 	IsClosed    bool
 	IssueIDs    []int64
+	LabelIDs    []int64
 }
 
 // GetUserIssueStats returns issue statistic information for dashboard by given conditions.
@@ -1442,29 +1509,38 @@ func GetUserIssueStats(opts UserIssueStatsOptions) (*IssueStats, error) {
 		cond = cond.And(builder.In("issue.id", opts.IssueIDs))
 	}
 
+	sess := func(cond builder.Cond) *xorm.Session {
+		s := x.Where(cond)
+		if len(opts.LabelIDs) > 0 {
+			s.Join("INNER", "issue_label", "issue_label.issue_id = issue.id").
+				In("issue_label.label_id", opts.LabelIDs)
+		}
+		return s
+	}
+
 	switch opts.FilterMode {
 	case FilterModeAll:
-		stats.OpenCount, err = x.Where(cond).And("issue.is_closed = ?", false).
+		stats.OpenCount, err = sess(cond).And("issue.is_closed = ?", false).
 			And(builder.In("issue.repo_id", opts.UserRepoIDs)).
 			Count(new(Issue))
 		if err != nil {
 			return nil, err
 		}
-		stats.ClosedCount, err = x.Where(cond).And("issue.is_closed = ?", true).
+		stats.ClosedCount, err = sess(cond).And("issue.is_closed = ?", true).
 			And(builder.In("issue.repo_id", opts.UserRepoIDs)).
 			Count(new(Issue))
 		if err != nil {
 			return nil, err
 		}
 	case FilterModeAssign:
-		stats.OpenCount, err = x.Where(cond).And("issue.is_closed = ?", false).
+		stats.OpenCount, err = sess(cond).And("issue.is_closed = ?", false).
 			Join("INNER", "issue_assignees", "issue.id = issue_assignees.issue_id").
 			And("issue_assignees.assignee_id = ?", opts.UserID).
 			Count(new(Issue))
 		if err != nil {
 			return nil, err
 		}
-		stats.ClosedCount, err = x.Where(cond).And("issue.is_closed = ?", true).
+		stats.ClosedCount, err = sess(cond).And("issue.is_closed = ?", true).
 			Join("INNER", "issue_assignees", "issue.id = issue_assignees.issue_id").
 			And("issue_assignees.assignee_id = ?", opts.UserID).
 			Count(new(Issue))
@@ -1472,27 +1548,27 @@ func GetUserIssueStats(opts UserIssueStatsOptions) (*IssueStats, error) {
 			return nil, err
 		}
 	case FilterModeCreate:
-		stats.OpenCount, err = x.Where(cond).And("issue.is_closed = ?", false).
+		stats.OpenCount, err = sess(cond).And("issue.is_closed = ?", false).
 			And("issue.poster_id = ?", opts.UserID).
 			Count(new(Issue))
 		if err != nil {
 			return nil, err
 		}
-		stats.ClosedCount, err = x.Where(cond).And("issue.is_closed = ?", true).
+		stats.ClosedCount, err = sess(cond).And("issue.is_closed = ?", true).
 			And("issue.poster_id = ?", opts.UserID).
 			Count(new(Issue))
 		if err != nil {
 			return nil, err
 		}
 	case FilterModeMention:
-		stats.OpenCount, err = x.Where(cond).And("issue.is_closed = ?", false).
+		stats.OpenCount, err = sess(cond).And("issue.is_closed = ?", false).
 			Join("INNER", "issue_user", "issue.id = issue_user.issue_id and issue_user.is_mentioned = ?", true).
 			And("issue_user.uid = ?", opts.UserID).
 			Count(new(Issue))
 		if err != nil {
 			return nil, err
 		}
-		stats.ClosedCount, err = x.Where(cond).And("issue.is_closed = ?", true).
+		stats.ClosedCount, err = sess(cond).And("issue.is_closed = ?", true).
 			Join("INNER", "issue_user", "issue.id = issue_user.issue_id and issue_user.is_mentioned = ?", true).
 			And("issue_user.uid = ?", opts.UserID).
 			Count(new(Issue))
@@ -1502,7 +1578,7 @@ func GetUserIssueStats(opts UserIssueStatsOptions) (*IssueStats, error) {
 	}
 
 	cond = cond.And(builder.Eq{"issue.is_closed": opts.IsClosed})
-	stats.AssignCount, err = x.Where(cond).
+	stats.AssignCount, err = sess(cond).
 		Join("INNER", "issue_assignees", "issue.id = issue_assignees.issue_id").
 		And("issue_assignees.assignee_id = ?", opts.UserID).
 		Count(new(Issue))
@@ -1510,14 +1586,14 @@ func GetUserIssueStats(opts UserIssueStatsOptions) (*IssueStats, error) {
 		return nil, err
 	}
 
-	stats.CreateCount, err = x.Where(cond).
+	stats.CreateCount, err = sess(cond).
 		And("poster_id = ?", opts.UserID).
 		Count(new(Issue))
 	if err != nil {
 		return nil, err
 	}
 
-	stats.MentionCount, err = x.Where(cond).
+	stats.MentionCount, err = sess(cond).
 		Join("INNER", "issue_user", "issue.id = issue_user.issue_id and issue_user.is_mentioned = ?", true).
 		And("issue_user.uid = ?", opts.UserID).
 		Count(new(Issue))
@@ -1525,7 +1601,7 @@ func GetUserIssueStats(opts UserIssueStatsOptions) (*IssueStats, error) {
 		return nil, err
 	}
 
-	stats.YourRepositoriesCount, err = x.Where(cond).
+	stats.YourRepositoriesCount, err = sess(cond).
 		And(builder.In("issue.repo_id", opts.UserRepoIDs)).
 		Count(new(Issue))
 	if err != nil {
@@ -1764,6 +1840,19 @@ func (issue *Issue) updateClosedNum(e Engine) (err error) {
 	return
 }
 
+// FindAndUpdateIssueMentions finds users mentioned in the given content string, and saves them in the database.
+func (issue *Issue) FindAndUpdateIssueMentions(ctx DBContext, doer *User, content string) (mentions []*User, err error) {
+	rawMentions := references.FindAllMentionsMarkdown(content)
+	mentions, err = issue.ResolveMentionsByVisibility(ctx, doer, rawMentions)
+	if err != nil {
+		return nil, fmt.Errorf("UpdateIssueMentions [%d]: %v", issue.ID, err)
+	}
+	if err = UpdateIssueMentions(ctx, issue.ID, mentions); err != nil {
+		return nil, fmt.Errorf("UpdateIssueMentions [%d]: %v", issue.ID, err)
+	}
+	return
+}
+
 // ResolveMentionsByVisibility returns the users mentioned in an issue, removing those that
 // don't have access to reading it. Teams are expanded into their users, but organizations are ignored.
 func (issue *Issue) ResolveMentionsByVisibility(ctx DBContext, doer *User, mentions []string) (users []*User, err error) {
@@ -1953,13 +2042,24 @@ func deleteIssuesByRepoID(sess Engine, repoID int64) (attachmentPaths []string, 
 		return
 	}
 
+	if _, err = sess.In("issue_id", deleteCond).
+		Delete(&ProjectIssue{}); err != nil {
+		return
+	}
+
+	if _, err = sess.In("dependent_issue_id", deleteCond).
+		Delete(&Comment{}); err != nil {
+		return
+	}
+
 	var attachments []*Attachment
 	if err = sess.In("issue_id", deleteCond).
 		Find(&attachments); err != nil {
 		return
 	}
+
 	for j := range attachments {
-		attachmentPaths = append(attachmentPaths, attachments[j].LocalPath())
+		attachmentPaths = append(attachmentPaths, attachments[j].RelativePath())
 	}
 
 	if _, err = sess.In("issue_id", deleteCond).

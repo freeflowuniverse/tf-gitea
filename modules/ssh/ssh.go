@@ -5,6 +5,7 @@
 package ssh
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -136,6 +137,52 @@ func publicKeyHandler(ctx ssh.Context, key ssh.PublicKey) bool {
 		return false
 	}
 
+	// check if we have a certificate
+	if cert, ok := key.(*gossh.Certificate); ok {
+		if len(setting.SSH.TrustedUserCAKeys) == 0 {
+			return false
+		}
+
+		// look for the exact principal
+		for _, principal := range cert.ValidPrincipals {
+			pkey, err := models.SearchPublicKeyByContentExact(principal)
+			if err != nil {
+				log.Error("SearchPublicKeyByContentExact: %v", err)
+				return false
+			}
+
+			if models.IsErrKeyNotExist(err) {
+				continue
+			}
+
+			c := &gossh.CertChecker{
+				IsUserAuthority: func(auth gossh.PublicKey) bool {
+					for _, k := range setting.SSH.TrustedUserCAKeysParsed {
+						if bytes.Equal(auth.Marshal(), k.Marshal()) {
+							return true
+						}
+					}
+
+					return false
+				},
+			}
+
+			// check the CA of the cert
+			if !c.IsUserAuthority(cert.SignatureKey) {
+				return false
+			}
+
+			// validate the cert for this principal
+			if err := c.CheckCert(principal, cert); err != nil {
+				return false
+			}
+
+			ctx.SetValue(giteaKeyID, pkey.ID)
+
+			return true
+		}
+	}
+
 	pkey, err := models.SearchPublicKeyByContent(strings.TrimSpace(string(gossh.MarshalAuthorizedKey(key))))
 	if err != nil {
 		log.Error("SearchPublicKeyByContent: %v", err)
@@ -149,13 +196,17 @@ func publicKeyHandler(ctx ssh.Context, key ssh.PublicKey) bool {
 
 // Listen starts a SSH server listens on given port.
 func Listen(host string, port int, ciphers []string, keyExchanges []string, macs []string) {
-	// TODO: Handle ciphers, keyExchanges, and macs
-
 	srv := ssh.Server{
 		Addr:             fmt.Sprintf("%s:%d", host, port),
 		PublicKeyHandler: publicKeyHandler,
 		Handler:          sessionHandler,
-
+		ServerConfigCallback: func(ctx ssh.Context) *gossh.ServerConfig {
+			config := &gossh.ServerConfig{}
+			config.KeyExchanges = keyExchanges
+			config.MACs = macs
+			config.Ciphers = ciphers
+			return config
+		},
 		// We need to explicitly disable the PtyCallback so text displays
 		// properly.
 		PtyCallback: func(ctx ssh.Context, pty ssh.Pty) bool {
