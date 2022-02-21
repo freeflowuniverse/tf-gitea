@@ -47,6 +47,8 @@ const (
 	tplMustChangePassword = "user/auth/change_passwd"
 	// threebot connect server
 	threebotConnectServer = "https://login.threefold.me"
+	// openkyc server
+	openKycServer = "https://login.threefold.me"
 	// tplSignIn template for sign in page
 	tplSignIn base.TplName = "user/auth/signin"
 	// tplSignUp template path for sign up page
@@ -152,6 +154,7 @@ type SignedData struct {
 type EmailData struct {
 	Email struct {
 		Email string `json:"email"`
+		Sei   string `json:"sei"`
 	} `json:"email"`
 }
 
@@ -752,6 +755,21 @@ func VerifyCallback( ctx *context.Context) {
 		ctx.ServerError("SignIn", err)
 		return
 	}
+
+		// Validate sei with OpenKyc
+	verifySeiUrl := openKycServer + "/verification/verify-identity-identifier?identifier=" + emailData.Email.Sei
+
+	seiResp, err := oauthClient.Get(verifySeiUrl)
+	if err != nil {
+		ctx.ServerError("SignIn", err)
+		return
+	}
+
+	if seiResp.StatusCode != 200 {
+		ctx.ServerError("SignIn", errors.New("Error while verifying sei"))
+		return
+	}
+	
 
 	// Gets user if it doesn't exist create
 	userName := strings.TrimSuffix(signedData.DoubleName, ".3bot")
