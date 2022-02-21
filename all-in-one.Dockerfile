@@ -66,8 +66,6 @@ COPY docker/root /
 COPY --from=build-env /go/src/code.gitea.io/gitea/gitea /app/gitea/gitea
 RUN ln -s /app/gitea/gitea /usr/local/bin/gitea
 
-
-FROM  threefolddev/gitea_3bot
 #ARG LLVM_CONFIG='/usr/lib/llvm8/bin/llvm-config'
 RUN apk update &&  apk upgrade && apk add --no-cache openssh bash dcron curl wget rsync ca-certificates openssl
 # alpine includes "postgres" user/group in base install

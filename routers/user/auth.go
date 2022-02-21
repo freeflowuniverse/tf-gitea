@@ -6,15 +6,14 @@
 package user
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
-	"net/url"
-	"encoding/json"
-	"encoding/base64"
-
 
 	"code.gitea.io/gitea/models"
 	"code.gitea.io/gitea/modules/auth"
@@ -139,16 +138,16 @@ func checkAutoLogin(ctx *context.Context) bool {
 
 type ThreebotData struct {
 	DoubleName string `json:"doubleName"`
-	State string `json:"signedState"`
-	Data struct {
-		Nonce string `json:"nonce"`
+	State      string `json:"signedState"`
+	Data       struct {
+		Nonce      string `json:"nonce"`
 		CipherText string `json:"ciphertext"`
 	} `json:"data"`
 }
 
 type SignedData struct {
 	SignedAttempt string `json:"signedAttempt"`
-	DoubleName string `json:"doubleName"`
+	DoubleName    string `json:"doubleName"`
 }
 
 type EmailData struct {
@@ -162,7 +161,7 @@ type UserData struct {
 	PublicKey string `json:"publicKey"`
 }
 
-func getSeedKeys() ([]byte, []byte, error){
+func getSeedKeys() ([]byte, []byte, error) {
 	reader := strings.NewReader(setting.OauthSeed)
 	verifyKey, signKey, err := sign.GenerateKey(reader)
 	if err != nil {
@@ -199,7 +198,6 @@ func AdminSignIn(ctx *context.Context) {
 
 	ctx.HTML(200, tplSignIn)
 }
-
 
 // SignIn using threebot connect
 func SignIn(ctx *context.Context) {
@@ -667,7 +665,7 @@ func SignInOAuth(ctx *context.Context) {
 	// redirect is done in oauth2.Auth
 }
 
-func VerifyCallback( ctx *context.Context) {
+func VerifyCallback(ctx *context.Context) {
 	state := ctx.Session.Get("threebotConnectState").(string)
 	signedAttempt := ctx.Req.Request.URL.Query().Get("signedAttempt")
 
@@ -706,7 +704,7 @@ func VerifyCallback( ctx *context.Context) {
 
 	var userPubKey32 [32]byte
 	copy(userPubKey32[:], userPubKey)
-	verifiedData, verified:= sign.Open(nil, signedHash, &userPubKey32)
+	verifiedData, verified := sign.Open(nil, signedHash, &userPubKey32)
 
 	if !verified {
 		ctx.ServerError("SignIn", errors.New("Error while verifying signature"))
@@ -734,7 +732,7 @@ func VerifyCallback( ctx *context.Context) {
 		return
 	}
 	_, privKeyCr, err := getSeedKeys()
-	if err != nil{
+	if err != nil {
 		ctx.ServerError("SignIn", err)
 		return
 	}
@@ -756,7 +754,7 @@ func VerifyCallback( ctx *context.Context) {
 		return
 	}
 
-		// Validate sei with OpenKyc
+	// Validate sei with OpenKyc
 	verifySeiUrl := openKycServer + "/verification/verify-identity-identifier?identifier=" + emailData.Email.Sei
 
 	seiResp, err := oauthClient.Get(verifySeiUrl)
@@ -769,7 +767,6 @@ func VerifyCallback( ctx *context.Context) {
 		ctx.ServerError("SignIn", errors.New("Error while verifying sei"))
 		return
 	}
-	
 
 	// Gets user if it doesn't exist create
 	userName := strings.TrimSuffix(signedData.DoubleName, ".3bot")
@@ -803,7 +800,7 @@ func VerifyCallback( ctx *context.Context) {
 			return
 		}
 		log.Trace("Account created: %s", user.Name)
-	
+
 		// Auto-set admin for the only user.
 		if models.CountUsers() == 1 {
 			user.IsAdmin = true
