@@ -5,7 +5,6 @@
 package acme
 
 import (
-	"bytes"
 	"context"
 	"crypto"
 	"encoding/base64"
@@ -93,9 +92,7 @@ func (c *Client) encodeExternalAccountBinding(eab *ExternalAccountBinding) (*jso
 	if err != nil {
 		return nil, err
 	}
-	var rProtected bytes.Buffer
-	fmt.Fprintf(&rProtected, `{"alg":%q,"kid":%q,"url":%q}`, eab.Algorithm, eab.KID, c.dir.RegURL)
-	return jwsWithMAC(eab.Key, eab.Algorithm, rProtected.Bytes(), []byte(jwk))
+	return jwsWithMAC(eab.Key, eab.KID, c.dir.RegURL, []byte(jwk))
 }
 
 // updateRegRFC is equivalent to c.UpdateReg but for CAs implementing RFC 8555.
@@ -412,4 +409,30 @@ func (c *Client) revokeCertRFC(ctx context.Context, key crypto.Signer, cert []by
 func isAlreadyRevoked(err error) bool {
 	e, ok := err.(*Error)
 	return ok && e.ProblemType == "urn:ietf:params:acme:error:alreadyRevoked"
+}
+
+// ListCertAlternates retrieves any alternate certificate chain URLs for the
+// given certificate chain URL. These alternate URLs can be passed to FetchCert
+// in order to retrieve the alternate certificate chains.
+//
+// If there are no alternate issuer certificate chains, a nil slice will be
+// returned.
+func (c *Client) ListCertAlternates(ctx context.Context, url string) ([]string, error) {
+	if _, err := c.Discover(ctx); err != nil { // required by c.accountKID
+		return nil, err
+	}
+
+	res, err := c.postAsGet(ctx, url, wantStatus(http.StatusOK))
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+
+	// We don't need the body but we need to discard it so we don't end up
+	// preventing keep-alive
+	if _, err := io.Copy(ioutil.Discard, res.Body); err != nil {
+		return nil, fmt.Errorf("acme: cert alternates response stream: %v", err)
+	}
+	alts := linkHeader(res.Header, "alternate")
+	return alts, nil
 }
